@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>リアルタイム字幕 完全版</title>
+<style>
+body{margin:0;background:#111;color:#fff;font-family:sans-serif;height:100vh;display:flex;flex-direction:column}
+.header{display:flex;gap:8px;padding:10px;background:#222;flex-wrap:wrap}
+button,input{border-radius:8px;border:none;padding:10px}
+button{cursor:pointer}
+.start{background:#00c853;color:#fff}.stop{background:#d50000;color:#fff}.save{background:#2962ff;color:#fff}
+#status{text-align:center;padding:8px;background:#1b1b1b}
+#subtitleWrap{flex:1;display:flex;align-items:flex-end;justify-content:center;padding:20px}
+#subtitle{background:rgba(0,0,0,.8);padding:15px 25px;border-radius:15px;font-size:36px;max-width:95%;text-align:center;word-break:break-word}
+#dictionaryPanel{background:#1a1a1a;padding:10px}
+.dict-inputs{display:flex;gap:5px;flex-wrap:wrap}
+.dict-inputs input{flex:1}
+#dictionaryList{max-height:140px;overflow:auto}
+.dict-item{display:flex;justify-content:space-between;padding:4px;border-bottom:1px solid #333}
+#history{height:220px;overflow:auto;background:#151515;padding:10px}
+.item{padding:6px;border-bottom:1px solid #333}
+</style>
+</head>
+<body>
+
+<div class="header">
+<button type="button" class="start" id="startBtn">開始</button>
+<button type="button" class="stop" id="stopBtn">停止</button>
+<button type="button" class="save" id="saveBtn">TXT保存</button>
+<input type="range" id="fontSize" min="20" max="80" value="36">
+</div>
+
+<div id="status">待機中</div>
+
+<div id="subtitleWrap"><div id="subtitle">ここに字幕が表示されます</div></div>
+
+<div id="dictionaryPanel">
+<h3>辞書登録</h3>
+<div class="dict-inputs">
+<input id="beforeWord" placeholder="認識される言葉">
+<input id="afterWord" placeholder="変換後">
+<button onclick="addWord()">追加</button>
+<button onclick="exportDictionary()">辞書保存</button>
+<input type="file" id="importFile" accept=".json">
+</div>
+<div id="dictionaryList"></div>
+</div>
+
+<div id="history"></div>
+
+<script>
+const subtitle=document.getElementById("subtitle");
+const statusEl=document.getElementById("status");
+const historyEl=document.getElementById("history");
+
+let dictionary=JSON.parse(localStorage.getItem("subtitle_dictionary")||"{}");
+let transcriptLog="";
+let running=false;
+
+function saveDictionary(){
+ localStorage.setItem("subtitle_dictionary",JSON.stringify(dictionary));
+}
+
+function renderDictionary(){
+ const list=document.getElementById("dictionaryList");
+ list.innerHTML="";
+ Object.entries(dictionary).forEach(([b,a])=>{
+  const div=document.createElement("div");
+  div.className="dict-item";
+  div.innerHTML=`<span>${b} → ${a}</span><button onclick="deleteWord('${b.replace(/'/g,'\\\'')}')">削除</button>`;
+  list.appendChild(div);
+ });
+}
+
+function addWord(){
+ const b=document.getElementById("beforeWord").value.trim();
+ const a=document.getElementById("afterWord").value.trim();
+ if(!b||!a)return;
+ dictionary[b]=a;
+ saveDictionary();
+ renderDictionary();
+ beforeWord.value="";
+ afterWord.value="";
+}
+
+function deleteWord(w){
+ delete dictionary[w];
+ saveDictionary();
+ renderDictionary();
+}
+
+function applyDictionary(text){
+ for(const [b,a] of Object.entries(dictionary)){
+  text=text.replace(new RegExp(b,"gi"),a);
+ }
+ return text;
+}
+
+function exportDictionary(){
+ const blob=new Blob([JSON.stringify(dictionary,null,2)],{type:"application/json"});
+ const a=document.createElement("a");
+ a.href=URL.createObjectURL(blob);
+ a.download="dictionary.json";
+ a.click();
+}
+
+document.getElementById("importFile").addEventListener("change",e=>{
+ const file=e.target.files[0];
+ if(!file)return;
+ const r=new FileReader();
+ r.onload=()=>{
+  dictionary=JSON.parse(r.result);
+  saveDictionary();
+  renderDictionary();
+ };
+ r.readAsText(file);
+});
+
+document.getElementById("fontSize").addEventListener("input",e=>{
+ subtitle.style.fontSize=e.target.value+"px";
+});
+
+const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+
+if(!SR){
+ alert("このブラウザは音声認識に対応していません");
+}else{
+
+ let recognition;
+
+ function createRecognition(){
+  recognition=new SR();
+  recognition.lang="ja-JP";
+  recognition.continuous=true;
+  recognition.interimResults=true;
+
+  recognition.onstart=()=>statusEl.textContent="🎤認識中";
+
+  recognition.onresult=(event)=>{
+   let live="";
+   for(let i=event.resultIndex;i<event.results.length;i++){
+    let text=applyDictionary(event.results[i][0].transcript);
+    live+=text;
+
+    if(event.results[i].isFinal){
+      transcriptLog+=text+"\n";
+      const div=document.createElement("div");
+      div.className="item";
+      div.textContent=new Date().toLocaleTimeString()+"  "+text;
+      historyEl.prepend(div);
+    }
+   }
+   if(live.trim()) subtitle.textContent=live;
+  };
+
+  recognition.onend=()=>{
+   if(running){
+    setTimeout(()=>{
+      try{recognition.start();}catch(e){}
+    },500);
+   }else{
+    statusEl.textContent="停止";
+   }
+  };
+ }
+
+ createRecognition();
+
+ startBtn.onclick=()=>{
+  running=true;
+  try{recognition.start();}catch(e){}
+ };
+
+ stopBtn.onclick=()=>{
+  running=false;
+  recognition.stop();
+ };
+
+ saveBtn.onclick=()=>{
+  const blob=new Blob([transcriptLog],{type:"text/plain"});
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(blob);
+  a.download="subtitle.txt";
+  a.click();
+ };
+}
+
+renderDictionary();
+</script>
+</body>
+</html>
